@@ -10,6 +10,11 @@ import datetime
 import signal
 import pexpect
 import requests
+import datetime as dt
+from colorama import Fore,init,Style
+init(autoreset=True)
+
+print(Fore.RED+'Hello {Fore.GREEN}Everyon!{Style.RESET_ALL}')
 
 LOG_FILENAME=__file__
 LOG_FILENAME=LOG_FILENAME.split('.')[0]+'.log'
@@ -20,9 +25,8 @@ logger_fortmater = logging.Formatter(fmt='%(asctime)s:%(funcName)s:%(lineno)d: [
 logger_handler.setFormatter(logger_fortmater)
 logger.addHandler(logger_handler)
 logging.getLogger().addHandler(logging.StreamHandler())
-TIMEOUT=5
 
-def ssh_login(ip,username,password,prompt,timeout=5):
+def ssh_login(ip,username,password,prompt,timeout=100):
     
     try: 
         obj = dict()
@@ -136,18 +140,75 @@ def ns_error_check(session,session_ip):
         logger.info("Cannot ssh into device "+session_ip)
     	return 1
     else:
+	cmd=exec_cmd(session,"sh version")
+	if re.search(r'(?<=NS)\d+\.\d',cmd):
+		release = re.search(r'(?<=NS)(\d+\.\d)',cmd)
+		release = release.group(1)
+        if re.search(r'(?<=Build\s).*?\.nc',cmd):
+		build = re.search(r'(?<=Build\s)(.*?)\.nc',cmd)
+		build = build.group(1)
+	if re.search(r'\(\d+-\w+\)',cmd):
+		bit = re.search(r'\((\d+)-\w+\)',cmd)
+		bit = bit.group(1)
+	build_name_unmod=release+"-"+build+"_nc"
+	release_dict = {'10.5':'tagma','11.0':'ion','11.1':'kopis','12.0':'oban','12.1':'kamet'}
+	release=release_dict[release]
+	build=re.sub(r'\.','_',build)
+	if release=='oban' or release=='kamet':
+		build_name=release+'_'+build+'_nc_'+bit
+	else:
+		build_name=release+'_'+build+'_nc'
+	logger.info("Build present on the box is "+build_name)	
         session['prompt']='#'
         cmd=exec_cmd(session,"shell")
         cmd=exec_cmd(session,"cd /var/core")
         logger.info(cmd)
-        cmd=exec_cmd(session,"cat bounds")
-        logger.info(cmd)
-        cmd=cmd.split()
-        n=cmd[2]
-        cmd=exec_cmd(session,"cd "+n)
-        logger.info(cmd)
-        cmd=exec_cmd(session,"ls")
-        logger.info(cmd)    
+	cmd=exec_cmd(session,"date")
+	cmd = cmd.split()
+	month = cmd[2]
+	date = int(cmd[3])
+	logger.info("Date set in Netcaler is "+str(date)+" & month is "+month)
+	cmd = exec_cmd(session,"ls -lrth")
+	cmd = cmd.split()
+	del cmd[0:4]
+	del cmd[-1]
+        n = len(cmd)/9
+	files = list()
+	for i in xrange(n):
+		if cmd[9*i+5]==month and (int(cmd[9*i+6])-2) <= date <= int(cmd[9*i+6]):
+			if re.match(r'^\d+$',cmd[9*i+8]): 
+				files.append(cmd[9*i+8]) 
+#        cmd=exec_cmd(session,"cat bounds")
+#        logger.info(cmd)
+#        cmd=cmd.split()
+#        n=cmd[2]
+#        cmd=exec_cmd(session,"cd "+n)
+#        logger.info(cmd)
+#        cmd=exec_cmd(session,"ls")
+#        logger.info(cmd)
+#	cmd=exec_cmd(session,"cd .."
+	cmd=exec_cmd(session,"ls "+"dbgbins-"+build_name_unmod)
+	logger.info(cmd)
+	if re.search(r'No such',cmd):
+		cmd=exec_cmd(session,"cp /var/nsinstall/"+build_name+"/dbg*.tgz .")
+		logger.info(cmd)
+		cmd=exec_cmd(session,"tar -zxvf dbg*.tgz")
+		logger.info(cmd)
+	for n in files:
+		cmd=exec_cmd(session,"cd "+n)
+        	logger.info(cmd)
+        	cmd=exec_cmd(session,"ls")
+		logger.info(cmd)
+		core_file_list=cmd.split()
+		del core_file_list[0]
+		del core_file_list[-1]
+		cmd=exec_cmd(session,"cd ..")
+		for i in range(len(core_file_list)):	
+			if re.search(r'\.gz',core_file_list[i]):
+				cmd=exec_cmd(session,"gunzip "+n+"/"+core_file_list[i])	
+				logger.info(cmd)
+			cmd=exec_cmd(session,"file "+n+"/"+core_file_list[i])
+			logger.info(cmd)		
         session['prompt']='>'
         cmd=exec_cmd(session,"exit")
         return 0
@@ -160,8 +221,9 @@ def usage():
     logger.info("\t\t-ap To make Admin partition on testbed 7700, Pleae remember to provide ip for the testbed in a file")
 
 def main():
-
-    try: 
+	
+   # try:
+	logger.info(Fore.GREEN+'BYE!!!')
         if len(sys.argv)<=2:
             logger.info("Please provide valid arguements\nSee usage")
             usage()
@@ -174,16 +236,56 @@ def main():
                 ip=re.split(r'[-\n]',line)
                 ip1=ip[0]
                 ip2=ip[1]
+	if '-crash' in sys.argv:
+	    for ips in ip:
+		if len(ips)>0:
+			ip1_session = ssh_login(ips,'nsroot','nsroot','>')
+			ip1_session['prompt'] = '#'
+			cmd = exec_cmd(ip1_session,'shell')
+			cmd = exec_cmd(ip1_session,'date +\"%F-%T\"')
+			cmd = cmd.split('\n')[1]
+			time_match = re.match("(\d+)-(\d+)-(\d+)-(\d+):(\d+):(\d+)",cmd)
+			time = dt.datetime(int(time_match.group(1)),int(time_match.group(2)),int(time_match.group(3)),int(time_match.group(4)),int(time_match.group(5)),int(time_match.group(6)))
+			logger.info(time)
+			logger.info(str(dt.datetime.now()))
+			delta = dt.datetime.now()-time
+			logger.info(delta)
+			cmd = exec_cmd(ip1_session,'cd /var/core')	
+			#logger.info(cmd)
+			cmd=exec_cmd(ip1_session,"ls -lD \"%F-%T\"")
+         		file_list = cmd.split('\n')
+         		del file_list[0:2]
+         		del file_list[len(file_list)-1]
+         		#logger.info(file_list)
+			ind = sys.argv.index('-crash')
+			test_start = sys.argv[ind+1] # Testinstance contains the test start timestamp
+         		start_time = re.match("test-(\d+)_(\d+)_(\d+)-(\d+)_(\d+)_(\d+)_(\d+)",test_start)
+         		test_start_time = dt.datetime(int(start_time.group(1)),int(start_time.group(2)),int(start_time.group(3)),int(start_time.group(4)),int(start_time.group(5)),int(start_time.group(6)))
+         		testinstance_time = test_start_time
+			logger.info(testinstance_time)
+			for i in file_list:
+				dir_details = i.split()
+               	 		dir_name = dir_details[6]
+                 		if dir_name == "bounds":
+                         		continue
+                 		time_match = re.match("(\d+)-(\d+)-(\d+)-(\d+):(\d+):(\d+)",dir_details[5])
+                         	time = dt.datetime(int(time_match.group(1)),int(time_match.group(2)),int(time_match.group(3)),int(time_match.group(4)),int(time_match.group(5)),int(time_match.group(6)))
+                 		if (testinstance_time - time < delta) and (re.match("^(\d+)",dir_name)):		
+					logger.info("Crash might be seen in folder "+dir_name)
+					cmd = exec_cmd(ip1_session,'cd /var/core/'+dir_name)
+					cmd=exec_cmd(ip1_session,"ls -lD \"%F-%T\"")
+         				file_list = cmd.split('\n')
+         				del file_list[0:2]
+         				del file_list[len(file_list)-1]		
+					logger.info(file_list)
         if '-c' in sys.argv:
 	    for ips in ip:
 		if len(ips)>0:
             		ip1_session=ssh_login(ips,'nsroot','nsroot','>')
-	    		cmd=exec_cmd(ip1_session,"sh license")
-            		logger.info(cmd)
-            		cmd=exec_cmd(ip1_session,"sh ha node")
-            		logger.info(cmd)
+	    		cmd=exec_cmd(ip1_session,"sh license | grep NO")
+            		logger.info(cmd)	
             		cmd=exec_cmd(ip1_session,"sh version")
-            		logger.info(cmd)
+            		logger.infox(cmd)
 	    		var=ns_error_check(ip1_session,ip1)
             		if var==0:
                 		logger.info("Done checking errors on "+ips)
@@ -200,6 +302,26 @@ def main():
             var=ns_ha_check(ip2_session,ip2,ip1) 
             if var==0:
                 logger.info("SUCCESS\nHA setup is in proper condition to run test")
+		cmd=exec_cmd(ip2_session,"sh ha node | grep IP")
+		if re.search(r'\d+\.\d+\.\d+\.(\d+)',cmd):
+			search = re.findall(r'\d+\.\d+\.\d+\.(\d+)',cmd)
+			#logger.info(search)
+			#logger.info(search[0])
+			ip1 = int(search[0])
+			#logger.info(search[1])
+			ip2 = int(search[1])
+			#logger.info(ip1)
+			#logger.info(ip2)
+          		#logger.info(cmd)
+		cmd=exec_cmd(ip2_session,"sh ha node | grep \"Master State\"")
+		if re.search(r'(?<=Master State: )(\w+)',cmd):
+			search = re.search(r'(?<=Master State: )(\w+)',cmd)
+			state = search.group(1)
+			#logger.info(state)
+            		#logger.info(cmd)
+		if (ip1>ip2 and state is 'Secondary') or (ip1<ip2 and state is 'Primary'):
+			cmd=exec_cmd(ip2_session,"force HA failover -force")
+			logger.info(cmd)
             else:
                 logger.info("FAILED\nPlease correct the testbed")	
 	if '-ap' in sys.argv:
@@ -230,8 +352,8 @@ def main():
             cmd=exec_cmd(session,"ping -c 4 10.102.1.98")
 	    logger.info(cmd)
 
-    except IOError as e:
-        logger.info("Filename "+sys.argv[1]+" was not found!!!\nPlease specify file name correctly"+str(e)) 
+   # except:
+       # logger.info("Filename "+sys.argv[1]+" has some error please check mnually!") 
 
 
 if __name__ == '__main__':
