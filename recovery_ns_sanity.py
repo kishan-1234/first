@@ -10,6 +10,7 @@ import datetime
 import signal
 import pexpect
 import requests 
+import smtplib
 
 def usage():
 
@@ -22,7 +23,7 @@ def usage():
         print("\t\t-powerports Comma seperated ports on which powercycle is to be performed")
         print("\t\t-log Followed by exact path and filename where log is to be generated")
         print("\t\t-int To enable only the specified interfaces")
-        
+	print("\t\t-e To send email")        
         
 if len(sys.argv) < 3:
 	print("Please provide valid arguments\nSee Usage")
@@ -86,6 +87,7 @@ try:
 							print("Incorrect Xenserver password in EATS testbed file corresponding to "+eats_ip)
 							exit()
 						file_vmname = " ".join(str(x) for x in line[7:])
+						print file_xen_ip,file_xen_user,file_xen_pass,file_vmname
 						sys.argv = sys.argv[:1]
 						sys.argv.extend(['-vpx',file_xen_ip,file_xen_user,file_xen_pass,file_vmname])
 
@@ -107,23 +109,28 @@ try:
 
         xenserverip = checker('-vpx',r'^(\d+\.){3}\d+$',1,'Invalid Xenserver IP entered.See usage',sys.argv)
         xen_user = checker('-vpx',r'^\w+$',2,'Incorrect Xenserver username entered.See usage',sys.argv)
-        xen_pass = checker('-vpx',r'^\w+$',3,'Incorrect Xenserver password entered.See usage',sys.argv)
+        xen_pass = checker('-vpx',r'^\S+$',3,'Incorrect Xenserver password entered.See usage',sys.argv)
         
 	if '-vpx' in sys.argv:
                 vmid = None
                 uuid = None
                 ind = sys.argv.index('-vpx')
         	vmname = sys.argv[ind+4]
-		for i in range(5,len(sys.argv)-ind):	
-			vmname = vmname + ' ' + sys.argv[ind+i] 	
+		for i in range(5,len(sys.argv)-ind):
+			if re.match(r'-',sys.argv[ind+i]):
+				break
+			else:	
+				vmname = vmname + ' ' + sys.argv[ind+i] 	
 		if eats_flag==1:
 			LOG_FILENAME='/export/home/atsuser/eats_logs/EATS_RECOVERY_LOG.txt'
 		else:
         		LOG_FILENAME='/home/atsuser/Log/BU/'+xenserverip+'_'+vmname+'.log'
 
         if '-powerip' in sys.argv and '-powerports' in sys.argv:
-                powerip,powerpath = checker('-powerip',r'^(\d+\.){3}\d+:\/(.*?\/)+$',1,'Incorrect PowerIP/Path provided',sys.argv).split(':')
-        powerports = checker('-powerports',r'^(\d+,)*.*?\d+$',1,'Incorrect Power ports provided',sys.argv)
+                #powerip,powerpath = checker('-powerip',r'^(\d+\.){3}\d+:\/(.*?\/)+\/?$',1,'Incorrect PowerIP/Path provided',sys.argv).split(':')
+		ind = sys.argv.index('-powerip')
+		powerip,powerpath = sys.argv[ind+1].split(':')
+        	powerports = checker('-powerports',r'^(\d+,)*.*?\d+$',1,'Incorrect Power ports provided',sys.argv)
 	if '-log' in sys.argv:
 		ind = sys.argv.index('-log')
 		log = sys.argv[ind+1]
@@ -131,8 +138,11 @@ try:
      #   log = checker('-log',r'^(\/\w+)+\.\w+$',1,'Incorrect log path provided',sys.argv)
 #	if log != None:
 #		LOG_FILENAME=log
-	intefaces = checker('-int',r'^((\d+\/)+\d+,)+(\d+\/)+\d+$',1,'Incorrect interfaces provided',sys.argv)
-        ssh_ip = checker('-ip',r'^(\d+\.){3}\d+$',1,'Incorrect DUT ip provided',sys.argv)
+#	interfaces = checker('-int',r'^((\d+\/)+\d+,)+(\d+\/)+\d+$',1,'Incorrect interfaces provided',sys.argv)
+	if '-int' in sys.argv:
+        	ind = sys.argv.index('-int')
+		interfaces = sys.argv[ind+1]
+	ssh_ip = checker('-ip',r'^(\d+\.){3}\d+$',1,'Incorrect DUT ip provided',sys.argv)
 
 	if'-mpx' not in sys.argv and '-vpx' not in sys.argv and '-eats' not in sys.argv:
 		print("Please provide valid arguements")
@@ -333,6 +343,10 @@ def ok_prompt(expect_session,obj):
                                 a = re.search(r'(\w+(\.\w+)+)\.gz',x)
                                 if a!=None:
                                         kernellist.append(a.group(1))
+			if re.match(r'sanity.*?\.gz',x) and not re.search(r'[\[\]]',x):
+				y = re.search(r'(\w+)\.gz',x)
+				if y!=None:
+					kernellist.append(y.group(1))
                 if not kernellist:
                         logger.info("No kernel is present on the device\nExiting")
                         obj['ret_vak'] = 6
@@ -340,10 +354,16 @@ def ok_prompt(expect_session,obj):
                 else:
                         logger.info("List of Kernels pesent on device")
                         logger.info(kernellist)
-                        if kernellist[-1]==prev_ker:
-                                n = -2
-                        else:
-                                n = -1
+			if 'sanitykernel' in kernellist:
+				n = kernellist.index('sanitykernel')
+			else:
+				if 'ns-11.0-72.15' in kernellist:
+					n = kernellist.index('ns-11.0-72.15')
+				else:
+                        		if kernellist[-1]==prev_ker:
+                                		n = -2
+                        		else:
+                                		n = -1
 			kernel = kernellist[n]
                         exec_cmd_with_prompt(obj,'load /'+kernellist[n],'OK')
                         logger.info("======================================================================================")
@@ -375,7 +395,7 @@ def login_prompt(expect_session,obj):
                 expect_session.sendline(obj['password'])
                 if obj['username'] == 'nsrecover':
                         logger.info("username is nsrecover")
-                        j = expect_session.expect([pexpect.TIMEOUT,'ogin:','#'])
+                        j = expect_session.expect([pexpect.TIMEOUT,'ogin:','(?<=\w)#(?!\w)'])
                         if j == 0:
                                 logger.info("Does not reach Password prompt")
                                 obj['ret_val'] = 0
@@ -451,14 +471,15 @@ def change_kernel(expect_session,obj,kernellist=None):
 		if ok_flag == 0:
                 	expect_session.sendline('reboot')
                 	expect_session.sendline('reboot')
-			logger.info("Kernel Changed,device is Rebooting.Please check in Sometime")
+			logger.info("Kernel Changed,device is Rebooting.Please check in Sometime")	
 		else:
 			expect_session.sendline('exit')
-			expect_session.sendline('exit')                
+			expect_session.sendline('exit')            
+#	logger.info("Recovery:PASSED")
         obj['ret_val'] = 0
         return obj                
 
-def telnet_login(ip,port,console_user,username,password,prompt,sessionhandle,flag,Timeout=15):
+def telnet_login(ip,port,console_user,username,password,prompt,sessionhandle,flag,Timeout=30):
     
     #try: 
         obj = dict()
@@ -476,10 +497,10 @@ def telnet_login(ip,port,console_user,username,password,prompt,sessionhandle,fla
                 logger.info("======================================================================================")
                 logger.info(cmd)
                 logger.info("======================================================================================\n")
-                s = pexpect.spawn(cmd, timeout=15)
+                s = pexpect.spawn(cmd, timeout=Timeout)
         else:
                 s=sessionhandle
-		s.timeout = 15
+		s.timeout = Timeout
         s.send('\r')  
         i = s.expect([pexpect.TIMEOUT, pexpect.EOF, 'ogin:', 'db>','(?<!\w)>(?!\w)',r'(?<=\w)#(?!\w)','OK'])
         if i == 0:
@@ -532,7 +553,7 @@ def ssh_login(ip,username,password,prompt,Timeout=15):
 	    	obj['expect_session'] = s
 	    	return(obj)
 	    elif j == 1:
-		logger.info("Cant SSH.Incorrect Xenserver password entered!")
+		logger.info("Cant SSH.Incorrect password entered!")
 		return None
         elif i == 4:
             obj['expect_session'] = s
@@ -553,7 +574,7 @@ def exec_cmd(obj,command):
     try:
         obj['expect_session'].expect(obj['prompt'])
     except:
-        logger.info("Prompt not found\nTrying to login to VPX")
+        logger.info("Exception found!")
     out = obj['expect_session'].before
     return out
 
@@ -569,17 +590,34 @@ def exec_cmd_with_prompt(obj,command,prompt):
     out = obj['expect_session'].before
     return out
 
+def sendmail():
+	
+	fromaddr = 'kishan.nigam@citrix.com'
+	toaddr = ['kishan.nigam@citrix.com','gautam.sreekumar@citrix.com']
+
+	subject = "Recovery Email Notification"
+
+	body = "Recovery for the device "+ip+" has failed. Please check the logs "+LOG_FILENAME
+
+	message = 'Subject: {}\n\n{}'.format(subject, body)
+	s = smtplib.SMTP('localhost')
+	s.sendmail(fromaddr, toaddr, message)
+	s.quit()
+	return
+	
 def ping_check(session):
-        
-        cmd1=exec_cmd(session,"ping -c 4 10.102.1.98")
+
+	global interfaces        
+        cmd1=exec_cmd(session,"ping -c 4 10.102.1.97")
         time.sleep(5)
         logger.info("======================================================================================")
         logger.info(cmd1)
         logger.info("======================================================================================\n")
         if re.search(r'\s0\.0%',cmd1) or re.search(r'\s0% packet loss',cmd1,re.IGNORECASE):
-                logger.info("Obelix is pingable from device")
+                logger.info("Anakin is pingable from device")
+		logger.info("Recovery:PASSED")
         else:
-                logger.info("Obelix is NOT pingable from device")
+                logger.info("Anakin is NOT pingable from device")
                 if eats_flag==1:
                         if file_ip=="10.102.165.50" or file_ip=="10.102.165.51":
                                         cmd = exec_cmd(session,"set ha node -hastatus ENABLED")
@@ -613,12 +651,16 @@ def ping_check(session):
                                 	logger.info("======================================================================================")
                                 	logger.info(cmd3)
                                 	logger.info("======================================================================================\n") 
-                cmd4=exec_cmd(session,"ping -c 4 10.102.1.98")
+		time.sleep(20)
+                cmd4=exec_cmd(session,"ping -c 4 10.102.1.97")
                 logger.info(cmd4)
                 if re.search(r'\s0\.0%',cmd4) or re.search(r'\s0% packet loss',cmd4,re.IGNORECASE):
-                        logger.info("Obelix is now pingable from device!!!!!!!!!\n")
+                        logger.info("Anakin is now pingable from device!!!!!!!!!\n")
+			logger.info("Recovery:PASSED")
                 else:
-                        logger.info("Obelix is still not pingable\nPlease check manually!")	
+                        logger.info("Anakin is still not pingable\nPlease check manually!")	
+			logger.info("Recovery:FAILED")
+			sendmail()
         session['expect_session'].send('exit\r')
         ind = session['expect_session'].expect([pexpect.TIMEOUT,'ogin:','now'])
         if ind == 2:
@@ -637,6 +679,7 @@ def main():
                 ssh_session2 = ssh_login(ssh_ip,'nsroot','nsroot','>')
                 if ssh_session2!=None:
                         logger.info("DUT "+ssh_ip+" is UP.\nExiting")
+			logger.info("Recovery:PASSED")
                         exit()
         if '-mpx' in sys.argv:
                 logger.info("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"+ip+":"+port+"+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
@@ -684,13 +727,21 @@ def main():
                 logger.info("Trying login through nsrecover/nsroot")
                 if '-vpx' in sys.argv:
                         session = telnet_login('vpx','vpx','root','nsrecover','nsroot','(?<!\w)>',session['expect_session'],1)
-			if session['ret_val'] == 2 and '-vpx' in sys.argv:
+			if session['ret_val'] == 0:
+				time.sleep(120)
+				ssh_session = ssh_login(ssh_ip,'nsroot','nsroot','>')
+				if ssh_session == None:
+					logger.info("Recovery:FAILED")
+				else:	
+					logger.info("Recovery:PASSED")
+			elif session['ret_val'] == 2 and '-vpx' in sys.argv:
 				session = telnet_login('vpx','vpx','root','nsrecover','nsroot','(?<!\w)>',session['expect_session'],1)
 				session['expect_session'].sendcontrol(']')
                 else:
                         session = telnet_login(ip,port,'root','nsrecover','nsroot','(?<!\w)>',None,1)       
 			if session['ret_val'] == 2 and '-mpx' in sys.argv:
 				session = telnet_login(ip,port,'root','nsrecover','nsroot','(?<!\w)>',None,1)
+#				logger.info("Recovery:PASSED")
         
         elif session['ret_val'] == 3:
                 logger.info("======================================================================================") 
