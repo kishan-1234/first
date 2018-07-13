@@ -12,15 +12,18 @@ import pexpect
 import requests 
 import smtplib
 
+
 def usage():
 
 	print("Usage : "+__file__.split('.')[0]+".py <IP of device> [-ip <IP address>] [-mpx <Console ip> <Console port>] [-vpx <xenserver ip> <Xenserver username> <Xenserver Password> <VM ip|VM name>] [-t <testbed name>] [-eats <ip>] [-powerip <PowerIP:Powerpath>] [-powerports <Ports>] [-log <log path>] [-int <interfaces>]")
         print("\t\t-ip IP to SSH into the DUT")
 	print("\t\t-mpx To recover MPX device.Console IP and Console Port Number has to provides as command line arguments respectively")
 	print("\t\t-vpx To recover VPX device.VM's Xenserver IP, Xenserver username, Xenserver password and IP of the VM has to be provided as commad line argument respectively\n\t\t     If not able to login from ip enter VM name instead of IP.")
+	print("\t\t NOTE: For SDX, enter Xenserver IP hosted on SDX and credentials(Genearally root/nsroot) and the Name of the VM on SDX (ip wont work for this case)")
 	print("\t\t-eats To recover EATS testbed DUT.IP of the dut has to be provided as argument")		
         print("\t\t-powerip Console sever IP address followed by colon, followed by exact path needed in console server")
         print("\t\t-powerports Comma seperated ports on which powercycle is to be performed")
+	print("\t\t-build To load a specified build only, If specified build is not present then any build will be picked present on box")
         print("\t\t-log Followed by exact path and filename where log is to be generated")
         print("\t\t-int To enable only the specified interfaces")
 	print("\t\t-e To send email")        
@@ -149,6 +152,8 @@ try:
 		usage()
 		exit()
 
+	build = checker('-build',r'^\S+$',1,'Incorrect build provided',sys.argv)
+		
 except IndexError:
 	print("Incorrect arguements provided.See Usage")
 	usage()
@@ -354,16 +359,22 @@ def ok_prompt(expect_session,obj):
                 else:
                         logger.info("List of Kernels pesent on device")
                         logger.info(kernellist)
-			if 'sanitykernel' in kernellist:
-				n = kernellist.index('sanitykernel')
+			if '-build' in sys.argv and build in kernellist:
+				logger.info("Loading the specified build")
+				n = kernellist.index(build)
 			else:
-				if 'ns-11.0-72.15' in kernellist:
-					n = kernellist.index('ns-11.0-72.15')
+				if 'build' in sys.argv:
+					logger.info("Specified build is not present on the box")
+				if 'sanitykernel' in kernellist:
+					n = kernellist.index('sanitykernel')
 				else:
-                        		if kernellist[-1]==prev_ker:
-                                		n = -2
-                        		else:
-                                		n = -1
+					if 'ns-11.0-72.15' in kernellist:
+						n = kernellist.index('ns-11.0-72.15')
+					else:
+                        			if kernellist[-1]==prev_ker:
+                                			n = -2
+                        			else:
+                                			n = -1
 			kernel = kernellist[n]
                         exec_cmd_with_prompt(obj,'load /'+kernellist[n],'OK')
                         logger.info("======================================================================================")
@@ -472,11 +483,12 @@ def change_kernel(expect_session,obj,kernellist=None):
                 	expect_session.sendline('reboot')
                 	expect_session.sendline('reboot')
 			logger.info("Kernel Changed,device is Rebooting.Please check in Sometime")	
+			obj['ret_val'] = 0
 		else:
 			expect_session.sendline('exit')
-			expect_session.sendline('exit')            
-#	logger.info("Recovery:PASSED")
-        obj['ret_val'] = 0
+			expect_session.sendline('exit')        
+			obj['ret_val'] = 3    
+#	logger.info("Recovery:PASSED") 
         return obj                
 
 def telnet_login(ip,port,console_user,username,password,prompt,sessionhandle,flag,Timeout=30):
@@ -502,7 +514,7 @@ def telnet_login(ip,port,console_user,username,password,prompt,sessionhandle,fla
                 s=sessionhandle
 		s.timeout = Timeout
         s.send('\r')  
-        i = s.expect([pexpect.TIMEOUT, pexpect.EOF, 'ogin:', 'db>','(?<!\w)>(?!\w)',r'(?<=\w)#(?!\w)','OK'])
+        i = s.expect([pexpect.TIMEOUT, pexpect.EOF, 'ogin:', 'db>','(?<!\w)>(?!\w)',r'(?<=\w)#(?!\w)','OK','--more--'])
         if i == 0:
                 return timeout_error(s,obj)
         elif i == 1:
@@ -517,6 +529,10 @@ def telnet_login(ip,port,console_user,username,password,prompt,sessionhandle,fla
                 return hash_prompt(s,obj)    
         elif i == 6:
                 return ok_prompt(s,obj)
+	elif i == 7:
+		s.sendline('q')
+		s.expect('OK')
+		return ok_prompt(s,obj)
     #except:
 	logger.info("Exception Hitted")
         return None
@@ -548,12 +564,15 @@ def ssh_login(ip,username,password,prompt,Timeout=15):
             s.sendline(password)
         elif i == 3:
             s.sendline(password)
-	    j = s.expect([prompt,'assword:'])
+	    j = s.expect([prompt,'assword:',pexpect.TIMEOUT,pexpect.EOF])
 	    if j == 0:
 	    	obj['expect_session'] = s
 	    	return(obj)
 	    elif j == 1:
 		logger.info("Cant SSH.Incorrect password entered!")
+		return None
+	    elif j == 2 or j == 3:
+		logger.info("Timeout/EOF error hit after passing password")
 		return None
         elif i == 4:
             obj['expect_session'] = s
@@ -597,7 +616,10 @@ def sendmail():
 
 	subject = "Recovery Email Notification"
 
-	body = "Recovery for the device "+ip+" has failed. Please check the logs "+LOG_FILENAME
+	if '-ip' in sys.argv:
+		body = "Recovery for the device "+ssh_ip+" has failed. Please check the logs "+LOG_FILENAME
+	else:
+		body = "Recovery for the device "+ip+" has failed. Please check the logs "+LOG_FILENAME
 
 	message = 'Subject: {}\n\n{}'.format(subject, body)
 	s = smtplib.SMTP('localhost')
@@ -688,6 +710,8 @@ def main():
                 logger.info("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"+xenserverip+"++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
                 xenserversession=ssh_login(xenserverip,xen_user,xen_pass,'#',100)
 		if xenserversession == None:
+			logger.info("Cannot login to xenserver")
+			logger.info("Recovery:FAILED")
 			exit()
                 cmd = exec_cmd(xenserversession,"xe vm-list params=name-label,networks")
                 logger.info(cmd+'\n\n')
@@ -737,12 +761,20 @@ def main():
 			elif session['ret_val'] == 2 and '-vpx' in sys.argv:
 				session = telnet_login('vpx','vpx','root','nsrecover','nsroot','(?<!\w)>',session['expect_session'],1)
 				session['expect_session'].sendcontrol(']')
+			elif session['ret_val'] == 3 and '-vpx' in sys.argv:
+                                session = telnet_login('vpx','vpx','root','nsroot','nsroot','(?<!\w)>',session['expect_session'],1)
+                                if session['ret_val'] == 1:
+                                	ping_check(session)	
                 else:
                         session = telnet_login(ip,port,'root','nsrecover','nsroot','(?<!\w)>',None,1)       
 			if session['ret_val'] == 2 and '-mpx' in sys.argv:
 				session = telnet_login(ip,port,'root','nsrecover','nsroot','(?<!\w)>',None,1)
 #				logger.info("Recovery:PASSED")
-        
+			elif session['ret_val'] == 3 and '-mpx' in sys.argv:
+				session = telnet_login(ip,port,'root','nsroot','nsroot','(?<!\w)>',None,1)
+				if session['ret_val'] == 1:
+					ping_check(session)
+
         elif session['ret_val'] == 3:
                 logger.info("======================================================================================") 
                 logger.info("Device Recovered please Login now")
