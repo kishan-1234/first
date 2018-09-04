@@ -1,3 +1,10 @@
+#!/usr/bin/python
+#Script_Name: recovery_ns_sanity.py
+#Script_Author: Kishan Nigam
+#Script_Author_MailId: kishan.nigam@citrix.com
+#Script_Exec_Time: 1800
+#Script Description: To recover Netscaler(MPX,VPX,SDX) from unusal prompts
+
 import time
 import re
 import logging
@@ -53,7 +60,10 @@ try:
 
 	if '-eats' in sys.argv:
 		eats_flag = 1
-		eats_file = open("/export/home/atsuser/Scripts/ATS_Internal/EATS_DUT_DETAILS.txt","r")
+		eats_file = open("/export/home/kishann/Automation/ATS_Internal/Scripts/EATS_DUT_DETAILS.txt","r")
+		if not eats_file:
+			print("Cant open: /export/home/kishann/Automation/ATS_Internal/Scripts/EATS_DUT_DETAILS.txt")
+			exit()
 		cont = eats_file.readlines()
 		for line in cont:
 			line = line.split()
@@ -71,7 +81,7 @@ try:
 						else:
 							print("Incorrect Port present in EATS testbed file corresponding to "+eats_ip)
 							exit() 
-						sys.argv = sys.argv[:1]
+						#sys.argv = sys.argv[:1] NEW CHANGE
 						sys.argv.extend(['-mpx',file_ip,file_port])
 					elif line[3]=='VPX' or line[3]=='vpx':
 						if re.match(r'^(\d+\.){3}\d+$',line[4]):
@@ -91,9 +101,12 @@ try:
 							exit()
 						file_vmname = " ".join(str(x) for x in line[7:])
 						print file_xen_ip,file_xen_user,file_xen_pass,file_vmname
-						sys.argv = sys.argv[:1]
+						#sys.argv = sys.argv[:1] NEW CHANGE
 						sys.argv.extend(['-vpx',file_xen_ip,file_xen_user,file_xen_pass,file_vmname])
 
+		if '-mpx' not in sys.argv and '-vpx' not in sys.argv:
+			print "Cant find the provided IP in EATS_DUT_DETAILS.txt"
+			exit()
 
         ip = checker('-mpx',r'^(\d+\.){3}\d+$',1,'Invalid IP address entered.See usage',sys.argv)
         temp_port = checker('-mpx',r'^\d+$',2,'Invalid Port entered.See usage',sys.argv)
@@ -226,7 +239,7 @@ def timeout_error(expect_session,obj):
         if '-mpx' in sys.argv:
                 if '-powerip' in sys.argv and '-powerports' in sys.argv:
                         powercycle(powerip,powerpath,powerports)                
-                        expect_session.timeout = 600
+                        expect_session.timeout = 1000 #expecting more time 
                         expect_session.expect('loader.conf')
                         expect_session.sendcontrol('c')
                         expect_session.expect('OK')
@@ -248,7 +261,10 @@ def timeout_error(expect_session,obj):
                 expect_session.expect('#')
 		logger.info(expect_session.before)
                 cmd = exec_cmd_with_prompt(obj,"xl vm-list",'#')
-		logger.info(cmd)	
+		logger.info(cmd)
+		if re.search(r'not implemented',cmd):
+			cmd = exec_cmd_with_prompt(obj,"xl list-vm",'#')
+			logger.info(cmd+'\n\n')	
                 cmd = re.split(r'\s{2,}',cmd)
                 if vmname in cmd:
                         ind = cmd.index(vmname)
@@ -352,6 +368,11 @@ def ok_prompt(expect_session,obj):
 				y = re.search(r'(\w+)\.gz',x)
 				if y!=None:
 					kernellist.append(y.group(1))
+			if re.match(r'gcov.*?\.gz',x):
+				y = re.search(r'(\w+(\.\w+)+)\.gz',x)
+				if y!= None:
+					kernellist.append(y.group(1))			
+
                 if not kernellist:
                         logger.info("No kernel is present on the device\nExiting")
                         obj['ret_vak'] = 6
@@ -359,11 +380,13 @@ def ok_prompt(expect_session,obj):
                 else:
                         logger.info("List of Kernels pesent on device")
                         logger.info(kernellist)
+			if '-build' in sys.argv:
+				logger.info("Build supplied is "+build)
 			if '-build' in sys.argv and build in kernellist:
 				logger.info("Loading the specified build")
 				n = kernellist.index(build)
 			else:
-				if 'build' in sys.argv:
+				if '-build' in sys.argv:
 					logger.info("Specified build is not present on the box")
 				if 'sanitykernel' in kernellist:
 					n = kernellist.index('sanitykernel')
@@ -390,7 +413,6 @@ def ok_prompt(expect_session,obj):
                                 expect_session.expect('ogin:')
                         obj['ret_val'] = 2
                         return obj
-
 
 def login_prompt(expect_session,obj):
 
@@ -421,7 +443,7 @@ def login_prompt(expect_session,obj):
                                 	return change_kernel(expect_session,obj)
 				elif ok_flag == 1:
 					return change_kernel(expect_session,obj,[kernel,kernel])
-                j = expect_session.expect([pexpect.TIMEOUT,r'Done.*?>',r'\s*login:(?!\s*\w+)'])
+                j = expect_session.expect([pexpect.TIMEOUT,r'Done.*?>',r'(?<!\S\s)login:'])
                 logger.info("======================================================================================")
                 logger.info(expect_session.before)
                 logger.info("======================================================================================\n")
@@ -452,11 +474,19 @@ def change_kernel(expect_session,obj,kernellist=None):
                 	if re.match(r'ns.*?\.gz',x):
                         	y = re.search(r'(\w+-\w+\.\w+-\w+(\.\w+)+)\.gz',x)
                         	if y!=None:
-                                	kernellist.append(y.group(1))
-                        	if re.match(r'kernel.*?\.gz',x) and not re.search(r'[\[\]]',x):
-                                	a = re.search(r'(\w+(\.\w+)+)\.gz',x)
-                                	if a!=None:
-                                        	kernellist.append(a.group(1))
+                                	kernellist.append(y.group(1))	
+			if re.match(r'kernel.*?\.gz',x) and not re.search(r'[\[\]]',x):
+                                a = re.search(r'(\w+(\.\w+)+)\.gz',x)
+                                if a!=None:
+                                        kernellist.append(a.group(1))
+			if re.match(r'sanity.*?\.gz',x) and not re.search(r'[\[\]]',x):
+				y = re.search(r'(\w+)\.gz',x)
+				if y!=None:
+					kernellist.append(y.group(1))
+			if re.match(r'gcov.*?\.gz',x):
+				y = re.search(r'(\w+(\.\w+)+)\.gz',x)
+				if y!= None:
+					kernellist.append(y.group(1))
         if not kernellist:
                 logger.info("No kernel is present on the device\nExiting")
         else:
@@ -467,10 +497,16 @@ def change_kernel(expect_session,obj,kernellist=None):
                 search = re.search(r'(?<=kernel\="\/)(.*?)"',response)
                 if search:
                         search = search.group(1)
-                if kernellist[-1] != search:
-                        cmd = "sed -i '' 's/kernel=.*/"+"kernel=\"\/"+kernellist[-1]+"\""+"/' loader.conf"
+                if kernellist[-1] != search:		
+			n = -1
+			if 'sanitykernel' in kernellist and ok_flag == 0:
+				n = kernellist.index('sanitykernel')
+                        cmd = "sed -i '' 's/kernel=.*/"+"kernel=\"\/"+kernellist[n]+"\""+"/' loader.conf"
                 elif len(kernellist)>=2 and kernellist[-1] == search:
-                        cmd = "sed -i '' 's/kernel=.*/"+"kernel=\"\/"+kernellist[-2]+"\""+"/' loader.conf"
+			n = -2
+			if 'sanitykernel' in kernellist and ok_flag == 0:
+				n = kernellist.index('sanitykernel')
+                        cmd = "sed -i '' 's/kernel=.*/"+"kernel=\"\/"+kernellist[n]+"\""+"/' loader.conf"
                 else:
                         logger.info("No other kernel present on the device!\nExiting")
                         obj['ret_val'] = 0
@@ -612,15 +648,21 @@ def exec_cmd_with_prompt(obj,command,prompt):
 def sendmail():
 	
 	fromaddr = 'kishan.nigam@citrix.com'
-	toaddr = ['kishan.nigam@citrix.com','gautam.sreekumar@citrix.com']
+	if '-eats' in sys.argv:
+		toaddr = ['kishan.nigam@citrix.com']
+	else:
+		toaddr = ['kishan.nigam@citrix.com','gautam.sreekumar@citrix.com']	
 
 	subject = "Recovery Email Notification"
 
 	if '-ip' in sys.argv:
 		body = "Recovery for the device "+ssh_ip+" has failed. Please check the logs "+LOG_FILENAME
-	else:
-		body = "Recovery for the device "+ip+" has failed. Please check the logs "+LOG_FILENAME
-
+	elif '-eats' in sys.argv:
+		body = "Recovery for the device "+eats_ip+" has failed. Please check the logs "+LOG_FILENAME
+	elif '-mpx' in sys.argv:
+		body = "Recovery for the device "+ip+" "+port+" has failed. Please check the logs "+LOG_FILENAME
+	elif '-vpx' in sys.argv:
+		body = "Recovery for the device "+vmname+" has failed. Please check the logs "+LOG_FILENAME
 	message = 'Subject: {}\n\n{}'.format(subject, body)
 	s = smtplib.SMTP('localhost')
 	s.sendmail(fromaddr, toaddr, message)
@@ -641,13 +683,14 @@ def ping_check(session):
         else:
                 logger.info("Anakin is NOT pingable from device")
                 if eats_flag==1:
-                        if file_ip=="10.102.165.50" or file_ip=="10.102.165.51":
-                                        cmd = exec_cmd(session,"set ha node -hastatus ENABLED")
-                                        logger.info(cmd)
-                                        cmd = exec_cmd(session,"rm channel LA/1")
-                                        logger.info(cmd)
-                                        cmd = exec_cmd(session,"savec")
-                                        logger.info(cmd)
+			if '-mpx' in sys.argv:
+                        	if file_ip=="10.102.165.50" or file_ip=="10.102.165.51":
+                                        	cmd = exec_cmd(session,"set ha node -hastatus ENABLED")
+                                        	logger.info(cmd)
+                                        	cmd = exec_cmd(session,"rm channel LA/1")
+                                        	logger.info(cmd)
+                                        	cmd = exec_cmd(session,"savec")
+                                        	logger.info(cmd)
 		if '-int' in sys.argv:
 			interfaces = interfaces.split(',')
 			for i in interfaces:
@@ -725,6 +768,9 @@ def main():
                                 logger.info("VM Name of the provided IP is "+vmname)
                 cmd = exec_cmd(xenserversession,"xl vm-list")
                 logger.info(cmd+'\n\n')	
+                if re.search(r'not implemented',cmd):
+			cmd = exec_cmd(xenserversession,"xl list-vm")
+			logger.info(cmd+'\n\n') 
                 cmd = re.split(r'\s{2,}',cmd)
                 if vmname in cmd:
                         ind = cmd.index(vmname)
@@ -764,7 +810,8 @@ def main():
 			elif session['ret_val'] == 3 and '-vpx' in sys.argv:
                                 session = telnet_login('vpx','vpx','root','nsroot','nsroot','(?<!\w)>',session['expect_session'],1)
                                 if session['ret_val'] == 1:
-                                	ping_check(session)	
+                                	ping_check(session)
+				## nsroot/nsroot not working, ret_val = 2 can be implemented here	
                 else:
                         session = telnet_login(ip,port,'root','nsrecover','nsroot','(?<!\w)>',None,1)       
 			if session['ret_val'] == 2 and '-mpx' in sys.argv:
@@ -793,6 +840,35 @@ def main():
 
                 elif session['ret_val'] == 1:
                         ping_check(session)
+  
+		elif session['ret_val'] == 2:
+                	logger.info("Trying login through nsrecover/nsroot")
+                	if '-vpx' in sys.argv:
+                        	session = telnet_login('vpx','vpx','root','nsrecover','nsroot','(?<!\w)>',session['expect_session'],1)
+				if session['ret_val'] == 0:
+					time.sleep(120)
+					ssh_session = ssh_login(ssh_ip,'nsroot','nsroot','>')
+					if ssh_session == None:
+						logger.info("Recovery:FAILED")
+					else:	
+						logger.info("Recovery:PASSED")
+				elif session['ret_val'] == 2 and '-vpx' in sys.argv:
+					session = telnet_login('vpx','vpx','root','nsrecover','nsroot','(?<!\w)>',session['expect_session'],1)
+					session['expect_session'].sendcontrol(']')
+				elif session['ret_val'] == 3 and '-vpx' in sys.argv:
+                                	session = telnet_login('vpx','vpx','root','nsroot','nsroot','(?<!\w)>',session['expect_session'],1)
+                                	if session['ret_val'] == 1:
+                                		ping_check(session)
+					## nsroot/nsroot not working, ret_val = 2 can be implemented here	
+                	else:
+                        	session = telnet_login(ip,port,'root','nsrecover','nsroot','(?<!\w)>',None,1)       
+				if session['ret_val'] == 2 and '-mpx' in sys.argv:
+					session = telnet_login(ip,port,'root','nsrecover','nsroot','(?<!\w)>',None,1)
+#					logger.info("Recovery:PASSED")
+				elif session['ret_val'] == 3 and '-mpx' in sys.argv:
+					session = telnet_login(ip,port,'root','nsroot','nsroot','(?<!\w)>',None,1)
+					if session['ret_val'] == 1:
+						ping_check(session)	
 
                 elif session['ret_val'] == 6:
                         logger.info("======================================================================================") 
